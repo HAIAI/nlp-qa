@@ -1,8 +1,8 @@
-# NLP QA Final Project
+# NLP QA with BiLSTM and Attentions
 
-This repository contains starter code for the Natural Language Processing final project on question answering. For specific details on deliverables and deadlines, please refer to the final project spec posted on the course website.
+This repository contains WIP code for the Natural Language Processing on question answering.
 
-Authors: Shrey Desai, Yasumasa Onoe, and Greg Durrett
+Authors: Shrey Desai, Yasumasa Onoe, Greg Durrett and Hai Shaw
 
 1. [Getting Started](#getting-started)
     1. [Packages and Dependencies](#packages-and-dependencies)
@@ -20,7 +20,7 @@ Authors: Shrey Desai, Yasumasa Onoe, and Greg Durrett
 To begin, clone this repository onto your local machine:
 
 ```bash
-$ git clone https://github.com/gregdurrett/nlp-qa-finalproj.git
+$ git clone https://github.com/HAIAI/nlp-qa.git
 ```
 
 This project requires Python 3.6+ and the following dependencies:
@@ -178,7 +178,7 @@ We provide the following pre-trained baseline model. Models are benchmarked usin
 
 | Model                        | Hidden Dim | Parameters | SQuAD Dev EM/F1 | Train & Test Time |     Output File    |
 |------------------------------|:----------:|:----------:|:---------------:|:-----------------:|:------------------:|
-| [`baseline_small_squad.pt`](https://cs.utexas.edu/~gdurrett/courses/online-course/fp/baseline_small_squad.pt)  |     128    |  16M  |   47.21/59.81   |       9m 47s      |       [NA]
+| [`baseline_small_squad.pt`](https://drive.google.com/file/d/1w1fauUOkLJH9ondFu6S_AkkZgBQGNK3f/view?usp=sharing)  |     128    |  16M  |   47.21/59.81   |       9m 47s      |       [NA]
 
 Usage is largely the same as the previous examples; make sure to pass in the appropriate hidden dimension when invoking the script. For example, to use the baseline-small model for testing:
 
@@ -197,7 +197,7 @@ $ python3 main.py \
 
 ## GCP Setup
 
-[Google Cloud Platform (GCP)](https://cloud.google.com/) offers $300 in credits for 365 days towards most of their compute services, notably including access to GPUs. Using these resources is strictly optional. However, if you plan to pursue a final project that requires intensive model development and re-training the model and do not otherwise have access to a GPU, this resource may be very helpful. **It is critical that you turn off your GPUs when they are not being used to avoid burning through the credits quickly.**
+[Google Cloud Platform (GCP)](https://cloud.google.com/) offers $300 in credits for 365 days towards most of their compute services, notably including access to GPUs. Using these resources is strictly optional. However, if you plan to pursue a project that requires intensive model development and re-training the model and do not otherwise have access to a GPU, this resource may be very helpful. **It is critical that you turn off your GPUs when they are not being used to avoid burning through the credits quickly.**
 
 To begin, follow the instructions on their website to begin your free trial. Note that although a credit card must be supplied, you will not be charged, and the billing account will be automatically deactivated once the credits expire.
 
