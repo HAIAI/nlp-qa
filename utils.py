@@ -24,7 +24,13 @@ def cuda(args, tensor):
         Tensor on CUDA device.
     """
     if args.use_gpu and torch.cuda.is_available():
-        return tensor.cuda()
+        # return tensor.cuda()
+        # multi-ranks support:
+        if args.local_rank:
+            rank = args.local_rank
+        else:
+            rank = 0
+        return tensor.to(rank)
     return tensor
 
 

@@ -21,6 +21,7 @@ Author:
 """
 
 import argparse
+import os
 import pprint
 import json
 
@@ -36,6 +37,9 @@ from data import QADataset, Tokenizer, Vocabulary
 from model import BaselineReader
 from utils import cuda, search_span_endpoints, unpack
 
+import torch.distributed as dist
+from torch.nn.parallel.distributed import DistributedDataParallel as DDP
+from datetime import timedelta
 
 _TQDM_BAR_SIZE = 75
 _TQDM_LEAVE = False
@@ -48,6 +52,7 @@ _TQDM_OPTIONS = {
 parser = argparse.ArgumentParser()
 
 # Training arguments.
+parser.add_argument("--local_rank", type=int, help="Local rank. Necessary for using the torch.distributed.launch utility.")
 parser.add_argument('--device', type=int)
 parser.add_argument(
     '--use_gpu',
@@ -193,7 +198,10 @@ parser.add_argument(
     default=0.,
     help='dropout on passage and question vectors',
 )
-
+parser.add_argument(
+    "--resume",
+    action="store_true",
+    help="Resume training from saved checkpoint.")
 
 def _print_arguments(args):
     """Pretty prints command line args to stdout.
@@ -289,6 +297,11 @@ def train(args, epoch, model, dataset):
     Returns:
         Training cross-entropy loss normalized across all samples.
     """
+    if args.local_rank:
+        rank = args.local_rank
+    else:
+        rank = 0
+
     # Set the model in "train" mode.
     model.train()
 
@@ -311,6 +324,9 @@ def train(args, epoch, model, dataset):
     )
 
     for batch in train_dataloader:
+        # Move batch to target GPU
+        # batch = batch.to(rank)
+
         # Zero gradients.
         optimizer.zero_grad()
 
@@ -443,6 +459,36 @@ def write_predictions(args, model, dataset):
             f.write(f'{json.dumps(elem)}\n')
 
 
+def setup_dist(local_rank, backend='nccl'):
+
+    # Get rank and world size.
+    rank = int(os.getenv('RANK', '0'))
+    world_size = int(os.getenv("WORLD_SIZE", '1'))
+
+    print('> initializing torch.distributed with local rank: {}, '
+          'rank: {}, world size: {}'.format(local_rank, rank, world_size))
+    # assume all GPUs are used
+    device = rank % torch.cuda.device_count()
+    if local_rank is not None:
+        device = local_rank
+    else:
+        local_rank = device
+    torch.cuda.set_device(device)
+
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12345'
+    # os.environ['NCCL_ASYNC_ERROR_HANDLING'] = '1'
+    # -OR- os.environ['NCCL_BLOCKING_WAIT'] = '1'
+    os.environ['NCCL_BLOCKING_WAIT'] = '1'
+    
+    # initialize the process group
+    dist.init_process_group(backend=backend, rank=rank, world_size=world_size, init_method='env://', timeout=timedelta(seconds=2))
+    return local_rank
+
+def cleanup_dist():
+    dist.destroy_process_group()
+
+
 def main(args):
     """
     Main function for training, evaluating, and checkpointing.
@@ -459,6 +505,12 @@ def main(args):
     if not args.use_gpu and torch.cuda.is_available():
         print('warning: GPU is available but args.use_gpu = False')
         print()
+
+    local_rank = args.local_rank
+    # world_size = torch.cuda.device_count() # assume all local GPUs
+
+    # Set up distributed process group
+    rank = setup_dist(local_rank)
 
     # Set up datasets.
     train_dataset = QADataset(args, args.train_path)
@@ -480,6 +532,9 @@ def main(args):
 
     # Select model.
     model = _select_model(args)
+    #model = model.to(rank)
+    #model = DDP(model, device_ids=[rank], output_device=rank)
+
     num_pretrained = model.load_pretrained_embeddings(
         vocabulary, args.embedding_path
     )
@@ -491,8 +546,16 @@ def main(args):
     )
     print()
 
-    if args.use_gpu:
-        model = cuda(args, model)
+    # device = torch.device(f'cuda:{rank}')
+    model = model.to(rank)
+    model = DDP(model, device_ids=[rank], output_device=rank)
+
+    # if args.use_gpu:
+    #     model = cuda(args, model)
+
+    if args.resume and args.model_path:
+        map_location = {"cuda:0": "cuda:{}".format(rank)}
+        model.load_state_dict(torch.load(args.model_path, map_location=map_location))
 
     params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f'using model \'{args.model}\' ({params} params)')
@@ -507,34 +570,40 @@ def main(args):
         # Begin training.
         for epoch in range(1, args.epochs + 1):
             # Perform training and evaluation steps.
-            train_loss = train(args, epoch, model, train_dataset)
+            try:
+                train_loss = train(args, epoch, model, train_dataset)
+            except RuntimeError:
+                print(f'NCCL Wait Timeout, rank: \'{args.local_rank}\' (exit)')
+                exit(1)
             eval_loss = evaluate(args, epoch, model, dev_dataset)
 
             # If the model's evaluation loss yields a global improvement,
             # checkpoint the model.
-            eval_history.append(eval_loss < best_eval_loss)
-            if eval_loss < best_eval_loss:
-                best_eval_loss = eval_loss
-                torch.save(model.state_dict(), args.model_path)
-            
-            print(
-                f'epoch = {epoch} | '
-                f'train loss = {train_loss:.6f} | '
-                f'eval loss = {eval_loss:.6f} | '
-                f"{'saving model!' if eval_history[-1] else ''}"
-            )
-
-            # If early stopping conditions are met, stop training.
-            if _early_stop(args, eval_history):
-                suffix = 's' if args.early_stop > 1 else ''
+            if rank == 0:
+                eval_history.append(eval_loss < best_eval_loss)
+                if eval_loss < best_eval_loss:
+                    best_eval_loss = eval_loss
+                    torch.save(model.state_dict(), args.model_path)
+                
                 print(
-                    f'no improvement after {args.early_stop} epoch{suffix}. '
-                    'early stopping...'
+                    f'epoch = {epoch} | '
+                    f'train loss = {train_loss:.6f} | '
+                    f'eval loss = {eval_loss:.6f} | '
+                    f"{'saving model!' if eval_history[-1] else ''}"
                 )
-                print()
-                break
 
-    if args.do_test:
+                # If early stopping conditions are met, stop training.
+                if _early_stop(args, eval_history):
+                    suffix = 's' if args.early_stop > 1 else ''
+                    print(
+                        f'no improvement after {args.early_stop} epoch{suffix}. '
+                        'early stopping...'
+                    )
+                    print()
+                    cleanup_dist()
+                    break
+
+    if args.do_test and rank == 0:
         # Write predictions to the output file. Use the printed command
         # below to obtain official EM/F1 metrics.
         write_predictions(args, model, dev_dataset)
